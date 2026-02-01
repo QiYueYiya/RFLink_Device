@@ -303,18 +303,34 @@ void handleRFReceive()
             Serial.print(protocol);
             Serial.println(")");
 
-            // 只有未连接到主机时才保存历史记录
+            // 只有未连接到主机时才保存历史记录（并做去重：若存在则仅更新时间戳，保留位置）
             if (!bleDeviceConnected)
             {
-                // 保存到历史记录
-                signalHistory[historyIndex].code = receivedCode;
-                signalHistory[historyIndex].bitLength = bitLength;
-                signalHistory[historyIndex].protocol = protocol;
-                // 如果已同步时间则使用完整时间戳，否则仅保存millis()值供后续修正
-                signalHistory[historyIndex].timestamp = timeOffsetSynced ? (millis() + timeOffset) : millis();
-                historyIndex = (historyIndex + 1) % MAX_HISTORY;
-                if (historyCount < MAX_HISTORY)
-                    historyCount++;
+                // 检查是否已有相同信号，若有则仅更新时间戳
+                bool found = false;
+                for (int i = 0; i < historyCount; i++)
+                {
+                    int idx = (historyCount < MAX_HISTORY) ? i : (historyIndex + i) % MAX_HISTORY;
+                    if (signalHistory[idx].code == receivedCode)
+                    {
+                        signalHistory[idx].timestamp = timeOffsetSynced ? (millis() + timeOffset) : millis();
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (!found)
+                {
+                    // 保存到历史记录（环形缓冲）
+                    signalHistory[historyIndex].code = receivedCode;
+                    signalHistory[historyIndex].bitLength = bitLength;
+                    signalHistory[historyIndex].protocol = protocol;
+                    // 如果已同步时间则使用完整时间戳，否则仅保存millis()值供后续修正
+                    signalHistory[historyIndex].timestamp = timeOffsetSynced ? (millis() + timeOffset) : millis();
+                    historyIndex = (historyIndex + 1) % MAX_HISTORY;
+                    if (historyCount < MAX_HISTORY)
+                        historyCount++;
+                }
             }
             else
             {
