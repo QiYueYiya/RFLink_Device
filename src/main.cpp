@@ -80,6 +80,61 @@ void sendBLENotify(const String &type, const String &data)
     pCharNotify->notify();
 }
 
+bool parseCsvToken(const String &input, int &cursor, String &token)
+{
+    if (cursor < 0 || cursor > input.length())
+        return false;
+
+    int commaPos = input.indexOf(',', cursor);
+    if (commaPos < 0)
+    {
+        token = input.substring(cursor);
+        cursor = input.length() + 1;
+    }
+    else
+    {
+        token = input.substring(cursor, commaPos);
+        cursor = commaPos + 1;
+    }
+
+    token.trim();
+    return token.length() > 0;
+}
+
+bool parseUnsignedLongStrict(const String &token, unsigned long &value)
+{
+    char *endPtr = nullptr;
+    unsigned long parsed = strtoul(token.c_str(), &endPtr, 10);
+    if (endPtr == token.c_str() || *endPtr != '\0')
+        return false;
+    value = parsed;
+    return true;
+}
+
+bool parseUnsignedIntStrict(const String &token, unsigned int &value)
+{
+    unsigned long parsed = 0;
+    if (!parseUnsignedLongStrict(token, parsed) || parsed > 0xFFFF)
+        return false;
+    value = (unsigned int)parsed;
+    return true;
+}
+
+bool parseBool01(const String &token, bool &value)
+{
+    if (token == "0")
+    {
+        value = false;
+        return true;
+    }
+    if (token == "1")
+    {
+        value = true;
+        return true;
+    }
+    return false;
+}
+
 // BLE服务器回调
 class MyServerCallbacks : public BLEServerCallbacks
 {
@@ -118,7 +173,7 @@ class CommandCallbacks : public BLECharacteristicCallbacks
             Serial.print("BLE命令: ");
             Serial.println(cmdStr);
 
-            // 解析格式: send,code,bitLength,protocol 或 query,history
+            // 解析格式: query,history / time,timestamp / send,code,bits,pulse,syncH,syncL,zeroH,zeroL,oneH,oneL,inverted(0/1),repeat
             int firstComma = cmdStr.indexOf(',');
 
             if (firstComma > 0)
@@ -204,27 +259,61 @@ class CommandCallbacks : public BLECharacteristicCallbacks
                 // send命令 - 发送RF信号
                 else if (cmd == "send")
                 {
-                    int secondComma = cmdStr.indexOf(',', firstComma + 1);
-                    int thirdComma = cmdStr.indexOf(',', secondComma + 1);
+                    int cursor = firstComma + 1;
+                    String token;
 
-                    if (secondComma > firstComma && thirdComma > secondComma)
+                    unsigned long code = 0;
+                    unsigned int bitLength = 0;
+                    unsigned int pulseLength = 0;
+                    unsigned int syncHigh = 0;
+                    unsigned int syncLow = 0;
+                    unsigned int zeroHigh = 0;
+                    unsigned int zeroLow = 0;
+                    unsigned int oneHigh = 0;
+                    unsigned int oneLow = 0;
+                    bool invertedSignal = false;
+                    unsigned int repeatCount = 0;
+
+                    bool ok = true;
+                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedLongStrict(token, code);
+                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedIntStrict(token, bitLength);
+                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedIntStrict(token, pulseLength);
+                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedIntStrict(token, syncHigh);
+                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedIntStrict(token, syncLow);
+                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedIntStrict(token, zeroHigh);
+                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedIntStrict(token, zeroLow);
+                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedIntStrict(token, oneHigh);
+                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedIntStrict(token, oneLow);
+                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseBool01(token, invertedSignal);
+                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedIntStrict(token, repeatCount);
+
+                    if (ok)
                     {
-                        unsigned long code = strtoul(cmdStr.substring(firstComma + 1, secondComma).c_str(), nullptr, 10);
-                        unsigned int bitLength = (unsigned int)atoi(cmdStr.substring(secondComma + 1, thirdComma).c_str());
-                        unsigned int protocol = (unsigned int)atoi(cmdStr.substring(thirdComma + 1).c_str());
-
-                        if (code > 0 && bitLength > 0 && protocol > 0)
+                        if (code > 0 && bitLength > 0 && pulseLength > 0 &&
+                            syncHigh > 0 && syncLow > 0 && zeroHigh > 0 && zeroLow > 0 &&
+                            oneHigh > 0 && oneLow > 0 && repeatCount > 0)
                         {
-                            mySwitch.setProtocol(protocol);
+                            RCSwitch::Protocol customProtocol = {
+                                pulseLength,
+                                {syncHigh, syncLow},
+                                {zeroHigh, zeroLow},
+                                {oneHigh, oneLow},
+                                invertedSignal};
+
+                            mySwitch.setProtocol(customProtocol);
+                            mySwitch.setRepeatTransmit(repeatCount);
                             mySwitch.send(code, bitLength);
 
-                            Serial.print("BLE发送433MHz信号: ");
+                            Serial.print("BLE发送自定义433MHz信号: ");
                             Serial.print(code);
                             Serial.print(" (位长度: ");
                             Serial.print(bitLength);
-                            Serial.print(", 协议: ");
-                            Serial.print(protocol);
+                            Serial.print(", 脉宽: ");
+                            Serial.print(pulseLength);
+                            Serial.print(", 重发: ");
+                            Serial.print(repeatCount);
                             Serial.println(")");
+
                             String msg = "已发送: " + String(code);
                             sendBLENotify("status", msg);
                         }
@@ -232,6 +321,10 @@ class CommandCallbacks : public BLECharacteristicCallbacks
                         {
                             sendBLENotify("status", "错误: 参数无效");
                         }
+                    }
+                    else
+                    {
+                        sendBLENotify("status", "错误: send参数格式无效");
                     }
                 }
                 else
