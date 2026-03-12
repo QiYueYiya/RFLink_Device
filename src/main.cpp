@@ -208,6 +208,24 @@ bool parseUnsignedIntStrict(const String &token, unsigned int &value)
     return true;
 }
 
+bool parseUInt16Strict(const String &token, uint16_t &value)
+{
+    unsigned long parsed = 0;
+    if (!parseUnsignedLongStrict(token, parsed) || parsed > 0xFFFF)
+        return false;
+    value = (uint16_t)parsed;
+    return true;
+}
+
+bool parseUInt8Strict(const String &token, uint8_t &value)
+{
+    unsigned long parsed = 0;
+    if (!parseUnsignedLongStrict(token, parsed) || parsed > 0xFF)
+        return false;
+    value = (uint8_t)parsed;
+    return true;
+}
+
 bool parseBool01(const String &token, bool &value)
 {
     if (token == "0")
@@ -360,32 +378,32 @@ class CommandCallbacks : public BLECharacteristicCallbacks
 
                     unsigned long code = 0;
                     unsigned int bitLength = 0;
-                    unsigned int pulseLength = 0;
-                    unsigned int syncHigh = 0;
-                    unsigned int syncLow = 0;
-                    unsigned int zeroHigh = 0;
-                    unsigned int zeroLow = 0;
-                    unsigned int oneHigh = 0;
-                    unsigned int oneLow = 0;
+                    uint16_t pulseLength = 0;
+                    uint8_t syncHigh = 0;
+                    uint8_t syncLow = 0;
+                    uint8_t zeroHigh = 0;
+                    uint8_t zeroLow = 0;
+                    uint8_t oneHigh = 0;
+                    uint8_t oneLow = 0;
                     bool invertedSignal = false;
                     unsigned int repeatCount = 0;
 
                     bool ok = true;
                     ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedLongStrict(token, code);
                     ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedIntStrict(token, bitLength);
-                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedIntStrict(token, pulseLength);
-                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedIntStrict(token, syncHigh);
-                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedIntStrict(token, syncLow);
-                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedIntStrict(token, zeroHigh);
-                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedIntStrict(token, zeroLow);
-                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedIntStrict(token, oneHigh);
-                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedIntStrict(token, oneLow);
+                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUInt16Strict(token, pulseLength);
+                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUInt8Strict(token, syncHigh);
+                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUInt8Strict(token, syncLow);
+                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUInt8Strict(token, zeroHigh);
+                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUInt8Strict(token, zeroLow);
+                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUInt8Strict(token, oneHigh);
+                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUInt8Strict(token, oneLow);
                     ok = ok && parseCsvToken(cmdStr, cursor, token) && parseBool01(token, invertedSignal);
                     ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedIntStrict(token, repeatCount);
 
                     if (ok)
                     {
-                        if (code > 0 && bitLength > 0 && pulseLength > 0 &&
+                        if (code > 0 && bitLength > 0 && bitLength <= 64 && pulseLength > 0 &&
                             syncHigh > 0 && syncLow > 0 && zeroHigh > 0 && zeroLow > 0 &&
                             oneHigh > 0 && oneLow > 0 && repeatCount > 0)
                         {
