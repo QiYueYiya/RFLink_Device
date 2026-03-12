@@ -9,7 +9,7 @@
 // 引脚定义
 #define RF_TRANSMIT_PIN 8 // 433MHz发射引脚
 #define RF_RECEIVE_PIN 6  // 433MHz接收引脚
-#define BUTTON_PIN 10      // 点动开关引脚
+#define BUTTON_PIN 10     // 点动开关引脚
 
 // BLE UUIDs
 #define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
@@ -41,7 +41,7 @@ bool timeSyncReceived = false;
 // 存储方式：realTime = millis() + timeOffset
 // 使用uint64_t避免32位unsigned long溢出
 uint64_t timeOffset = 0;
-bool timeOffsetSynced = false;  // 标记是否已同步过时间
+bool timeOffsetSynced = false; // 标记是否已同步过时间
 
 // 信号历史记录结构
 struct SignalHistory
@@ -49,11 +49,99 @@ struct SignalHistory
     unsigned long code;
     unsigned int bitLength;
     unsigned int protocol;
-    uint64_t timestamp;  // 使用uint64_t存储毫秒级时间戳，避免溢出
+    unsigned int pulseLength;
+    unsigned int syncHigh;
+    unsigned int syncLow;
+    unsigned int zeroHigh;
+    unsigned int zeroLow;
+    unsigned int oneHigh;
+    unsigned int oneLow;
+    bool invertedSignal;
+    unsigned int repeatCount;
+    uint64_t timestamp; // 使用uint64_t存储毫秒级时间戳，避免溢出
 };
 SignalHistory signalHistory[MAX_HISTORY];
 int historyCount = 0;
 int historyIndex = 0;
+
+void getCustomParamsFromProtocol(unsigned int protocolId, unsigned int pulseLength, unsigned int &syncHigh, unsigned int &syncLow,
+                                 unsigned int &zeroHigh, unsigned int &zeroLow, unsigned int &oneHigh, unsigned int &oneLow,
+                                 bool &invertedSignal)
+{
+    switch (protocolId)
+    {
+    case 2:
+        syncHigh = 1;
+        syncLow = 10;
+        zeroHigh = 1;
+        zeroLow = 2;
+        oneHigh = 2;
+        oneLow = 1;
+        invertedSignal = false;
+        break;
+    case 3:
+        syncHigh = 30;
+        syncLow = 71;
+        zeroHigh = 4;
+        zeroLow = 11;
+        oneHigh = 9;
+        oneLow = 6;
+        invertedSignal = false;
+        break;
+    case 4:
+        syncHigh = 1;
+        syncLow = 6;
+        zeroHigh = 1;
+        zeroLow = 3;
+        oneHigh = 3;
+        oneLow = 1;
+        invertedSignal = false;
+        break;
+    case 5:
+        syncHigh = 6;
+        syncLow = 14;
+        zeroHigh = 1;
+        zeroLow = 2;
+        oneHigh = 2;
+        oneLow = 1;
+        invertedSignal = false;
+        break;
+    case 6:
+        syncHigh = 23;
+        syncLow = 1;
+        zeroHigh = 1;
+        zeroLow = 2;
+        oneHigh = 2;
+        oneLow = 1;
+        invertedSignal = true;
+        break;
+    case 7:
+        syncHigh = 2;
+        syncLow = 62;
+        zeroHigh = 1;
+        zeroLow = 6;
+        oneHigh = 6;
+        oneLow = 1;
+        invertedSignal = false;
+        break;
+    case 1:
+    default:
+        syncHigh = 1;
+        syncLow = 31;
+        zeroHigh = 1;
+        zeroLow = 3;
+        oneHigh = 3;
+        oneLow = 1;
+        invertedSignal = false;
+        break;
+    }
+
+    // 协议未识别或脉宽异常时，仍保证有可用默认值
+    if (pulseLength == 0)
+    {
+        pulseLength = 350;
+    }
+}
 
 // 按键长按回调
 void onResetLongPress()
@@ -205,7 +293,15 @@ class CommandCallbacks : public BLECharacteristicCallbacks
                                 int idx = (startIdx + i) % MAX_HISTORY;
                                 String histData = String(signalHistory[idx].code) + "," +
                                                   String(signalHistory[idx].bitLength) + "," +
-                                                  String(signalHistory[idx].protocol) + "," +
+                                                  String(signalHistory[idx].pulseLength) + "," +
+                                                  String(signalHistory[idx].syncHigh) + "," +
+                                                  String(signalHistory[idx].syncLow) + "," +
+                                                  String(signalHistory[idx].zeroHigh) + "," +
+                                                  String(signalHistory[idx].zeroLow) + "," +
+                                                  String(signalHistory[idx].oneHigh) + "," +
+                                                  String(signalHistory[idx].oneLow) + "," +
+                                                  String(signalHistory[idx].invertedSignal ? 1 : 0) + "," +
+                                                  String(signalHistory[idx].repeatCount) + "," +
                                                   String(signalHistory[idx].timestamp);
                                 sendBLENotify("history", histData);
                                 delay(50); // 给BLE时间发送
@@ -222,12 +318,12 @@ class CommandCallbacks : public BLECharacteristicCallbacks
                 {
                     String timeStr = cmdStr.substring(firstComma + 1);
                     uint64_t receivedTime = strtoull(timeStr.c_str(), nullptr, 10);
-                    
+
                     if (receivedTime > 0)
                     {
                         // 计算时间偏移：真实时间 = millis() + timeOffset
                         uint64_t newTimeOffset = receivedTime - millis();
-                        
+
                         // 如果这是第一次同步时间，需要更新之前保存的历史记录
                         if (!timeOffsetSynced && historyCount > 0)
                         {
@@ -239,16 +335,16 @@ class CommandCallbacks : public BLECharacteristicCallbacks
                                 signalHistory[idx].timestamp += newTimeOffset;
                             }
                         }
-                        
+
                         timeOffset = newTimeOffset;
                         timeOffsetSynced = true;
                         timeSyncReceived = true;
-                        
+
                         Serial.print("BLE同步时间戳: ");
                         Serial.println(receivedTime);
                         Serial.print("时间偏移: ");
                         Serial.println(timeOffset);
-                        
+
                         sendBLENotify("status", "时间已同步");
                     }
                     else
@@ -385,6 +481,21 @@ void handleRFReceive()
         unsigned long receivedCode = mySwitch.getReceivedValue();
         unsigned int bitLength = mySwitch.getReceivedBitlength();
         unsigned int protocol = mySwitch.getReceivedProtocol();
+        unsigned int pulseLength = mySwitch.getReceivedDelay();
+        unsigned int syncHigh = 1;
+        unsigned int syncLow = 31;
+        unsigned int zeroHigh = 1;
+        unsigned int zeroLow = 3;
+        unsigned int oneHigh = 3;
+        unsigned int oneLow = 1;
+        bool invertedSignal = false;
+        unsigned int repeatCount = 10;
+
+        getCustomParamsFromProtocol(protocol, pulseLength, syncHigh, syncLow, zeroHigh, zeroLow, oneHigh, oneLow, invertedSignal);
+        if (pulseLength == 0)
+        {
+            pulseLength = 350;
+        }
 
         if (receivedCode >= 1000)
         {
@@ -406,6 +517,17 @@ void handleRFReceive()
                     int idx = (historyCount < MAX_HISTORY) ? i : (historyIndex + i) % MAX_HISTORY;
                     if (signalHistory[idx].code == receivedCode)
                     {
+                        signalHistory[idx].bitLength = bitLength;
+                        signalHistory[idx].protocol = protocol;
+                        signalHistory[idx].pulseLength = pulseLength;
+                        signalHistory[idx].syncHigh = syncHigh;
+                        signalHistory[idx].syncLow = syncLow;
+                        signalHistory[idx].zeroHigh = zeroHigh;
+                        signalHistory[idx].zeroLow = zeroLow;
+                        signalHistory[idx].oneHigh = oneHigh;
+                        signalHistory[idx].oneLow = oneLow;
+                        signalHistory[idx].invertedSignal = invertedSignal;
+                        signalHistory[idx].repeatCount = repeatCount;
                         signalHistory[idx].timestamp = timeOffsetSynced ? (millis() + timeOffset) : millis();
                         found = true;
                         break;
@@ -418,6 +540,15 @@ void handleRFReceive()
                     signalHistory[historyIndex].code = receivedCode;
                     signalHistory[historyIndex].bitLength = bitLength;
                     signalHistory[historyIndex].protocol = protocol;
+                    signalHistory[historyIndex].pulseLength = pulseLength;
+                    signalHistory[historyIndex].syncHigh = syncHigh;
+                    signalHistory[historyIndex].syncLow = syncLow;
+                    signalHistory[historyIndex].zeroHigh = zeroHigh;
+                    signalHistory[historyIndex].zeroLow = zeroLow;
+                    signalHistory[historyIndex].oneHigh = oneHigh;
+                    signalHistory[historyIndex].oneLow = oneLow;
+                    signalHistory[historyIndex].invertedSignal = invertedSignal;
+                    signalHistory[historyIndex].repeatCount = repeatCount;
                     // 如果已同步时间则使用完整时间戳，否则仅保存millis()值供后续修正
                     signalHistory[historyIndex].timestamp = timeOffsetSynced ? (millis() + timeOffset) : millis();
                     historyIndex = (historyIndex + 1) % MAX_HISTORY;
@@ -427,8 +558,11 @@ void handleRFReceive()
             }
             else
             {
-                // 已连接到主机，直接发送信号给主机
-                String dataStr = String(receivedCode) + "," + String(bitLength) + "," + String(protocol);
+                // 已连接到主机，直接发送完整自定义参数给主机
+                String dataStr = String(receivedCode) + "," + String(bitLength) + "," +
+                                 String(pulseLength) + "," + String(syncHigh) + "," + String(syncLow) + "," +
+                                 String(zeroHigh) + "," + String(zeroLow) + "," + String(oneHigh) + "," +
+                                 String(oneLow) + "," + String(invertedSignal ? 1 : 0) + "," + String(repeatCount);
                 sendBLENotify("recv", dataStr);
             }
         }
