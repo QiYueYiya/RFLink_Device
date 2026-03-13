@@ -567,67 +567,9 @@ void handleRFReceive()
     }
 }
 
-void setup()
+// 处理待发送的433MHz信号（从BLE回调传递过来，避免在BLE任务中长时间阻塞）
+void processPendingSend()
 {
-    Serial.begin(9600);
-    delay(1000);
-    Serial.println("\n\n=== RF 433MHz 控制器启动 ===");
-    Serial.print("设备ID: ");
-    Serial.println(deviceId);
-
-    // 设置433MHz收发器
-    mySwitch.enableTransmit(RF_TRANSMIT_PIN);
-    mySwitch.enableReceive(RF_RECEIVE_PIN);
-    Serial.print("发射引脚: GPIO");
-    Serial.println(RF_TRANSMIT_PIN);
-    Serial.print("接收引脚: GPIO");
-    Serial.println(RF_RECEIVE_PIN);
-    Serial.println("433MHz收发器已初始化");
-
-    // 初始化BLE
-    setupBLE();
-
-    // 初始化按键（长按5秒重启）
-    button.setPressMs(5000);
-    button.attachLongPressStop(onResetLongPress);
-
-    Serial.println("\n=== 初始化完成 ===\n");
-}
-
-void loop()
-{
-    // 处理按键
-    button.tick();
-
-    // 处理BLE连接状态变化
-    if (!bleDeviceConnected && bleOldDeviceConnected)
-    {
-        delay(500);                     // 给蓝牙栈一点时间准备
-        pBLEServer->startAdvertising(); // 重新开始广播
-        Serial.println("开始BLE广播");
-        bleOldDeviceConnected = bleDeviceConnected;
-    }
-    if (bleDeviceConnected && !bleOldDeviceConnected)
-    {
-        bleOldDeviceConnected = bleDeviceConnected;
-        // 新设备连接时，发送当前状态
-        sendBLENotify("status", "就绪");
-    }
-
-    // 连接后若未收到时间同步命令则断开
-    if (bleDeviceConnected && !timeSyncReceived)
-    {
-        if (millis() - bleConnectStartMs > TIME_SYNC_TIMEOUT_MS)
-        {
-            Serial.println("未收到时间同步命令，断开连接");
-            if (pBLEServer)
-            {
-                pBLEServer->disconnect(pBLEServer->getConnId());
-            }
-        }
-    }
-
-    // 处理待发送的433MHz信号（从BLE回调传递过来，避免在BLE任务中长时间阻塞）
     if (pendingSendReady)
     {
         pendingSendReady = false;
@@ -652,8 +594,11 @@ void loop()
         String msg = "已发送: " + String(pendingSendParams.code);
         sendBLENotify("status", msg);
     }
+}
 
-    // 处理历史记录查询（从BLE回调传递过来，避免在BLE任务中循环delay导致栈溢出）
+// 处理历史记录查询（从BLE回调传递过来，避免在BLE任务中循环delay导致栈溢出）
+void processPendingHistoryQuery()
+{
     if (pendingHistoryQuery && bleDeviceConnected)
     {
         pendingHistoryQuery = false;
@@ -686,7 +631,77 @@ void loop()
             }
         }
     }
+}
 
+void processBLEConnectionState()
+{
+    // 处理BLE连接状态变化
+    if (!bleDeviceConnected && bleOldDeviceConnected)
+    {
+        delay(500);                     // 给蓝牙栈一点时间准备
+        pBLEServer->startAdvertising(); // 重新开始广播
+        Serial.println("开始BLE广播");
+        bleOldDeviceConnected = bleDeviceConnected;
+    }
+    if (bleDeviceConnected && !bleOldDeviceConnected)
+    {
+        bleOldDeviceConnected = bleDeviceConnected;
+        // 新设备连接时，发送当前状态
+        sendBLENotify("status", "就绪");
+    }
+
+    // 连接后若未收到时间同步命令则断开
+    if (bleDeviceConnected && !timeSyncReceived)
+    {
+        if (millis() - bleConnectStartMs > TIME_SYNC_TIMEOUT_MS)
+        {
+            Serial.println("未收到时间同步命令，断开连接");
+            if (pBLEServer)
+            {
+                pBLEServer->disconnect(pBLEServer->getConnId());
+            }
+        }
+    }
+}
+
+void setup()
+{
+    Serial.begin(9600);
+    delay(1000);
+    Serial.println("\n\n=== RF 433MHz 控制器启动 ===");
+    Serial.print("设备ID: ");
+    Serial.println(deviceId);
+
+    // 设置433MHz收发器
+    mySwitch.enableTransmit(RF_TRANSMIT_PIN);
+    mySwitch.enableReceive(RF_RECEIVE_PIN);
+    Serial.print("发射引脚: GPIO");
+    Serial.println(RF_TRANSMIT_PIN);
+    Serial.print("接收引脚: GPIO");
+    Serial.println(RF_RECEIVE_PIN);
+    Serial.println("433MHz收发器已初始化");
+
+    // 初始化BLE
+    setupBLE();
+
+    // 初始化按键（长按5秒重启）
+    button.setPressMs(5000);
+    button.attachLongPressStop(onResetLongPress);
+
+    Serial.println("\n=== 初始化完成 ===\n");
+}
+
+void loop()
+{
+    // 处理按键
+    button.tick();
+
+    processBLEConnectionState();
+
+    // 处理待发送的433MHz信号
+    processPendingSend();
+    // 处理待处理的历史记录查询
+    processPendingHistoryQuery();
     // 处理433MHz接收
     handleRFReceive();
 
