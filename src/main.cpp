@@ -64,6 +64,22 @@ SignalHistory signalHistory[MAX_HISTORY];
 int historyCount = 0;
 int historyIndex = 0;
 
+// 待处理的BLE命令（BLE回调运行在独立任务中，通过标志位将命令传递给主循环处理，避免栈溢出）
+struct PendingSendParams
+{
+    unsigned long code;
+    unsigned int bitLength;
+    uint16_t pulseLength;
+    uint8_t syncHigh, syncLow;
+    uint8_t zeroHigh, zeroLow;
+    uint8_t oneHigh, oneLow;
+    bool invertedSignal;
+    unsigned int repeatCount;
+};
+PendingSendParams pendingSendParams;
+volatile bool pendingSendReady = false;
+volatile bool pendingHistoryQuery = false;
+
 void getCustomParamsFromProtocol(unsigned int protocolId, unsigned int pulseLength, unsigned int &syncHigh, unsigned int &syncLow,
                                  unsigned int &zeroHigh, unsigned int &zeroLow, unsigned int &oneHigh, unsigned int &oneLow,
                                  bool &invertedSignal)
@@ -294,37 +310,8 @@ class CommandCallbacks : public BLECharacteristicCallbacks
                     if (queryType == "history")
                     {
                         Serial.println("BLE查询历史记录");
-                        if (historyCount == 0)
-                        {
-                            sendBLENotify("status", "无历史记录");
-                        }
-                        else
-                        {
-                            // 发送历史记录数量
-                            sendBLENotify("status", "历史记录: " + String(historyCount));
-                            delay(50);
-
-                            // 从最旧的记录开始发送
-                            int startIdx = (historyCount < MAX_HISTORY) ? 0 : historyIndex;
-                            for (int i = 0; i < historyCount; i++)
-                            {
-                                int idx = (startIdx + i) % MAX_HISTORY;
-                                String histData = String(signalHistory[idx].code) + "," +
-                                                  String(signalHistory[idx].bitLength) + "," +
-                                                  String(signalHistory[idx].pulseLength) + "," +
-                                                  String(signalHistory[idx].syncHigh) + "," +
-                                                  String(signalHistory[idx].syncLow) + "," +
-                                                  String(signalHistory[idx].zeroHigh) + "," +
-                                                  String(signalHistory[idx].zeroLow) + "," +
-                                                  String(signalHistory[idx].oneHigh) + "," +
-                                                  String(signalHistory[idx].oneLow) + "," +
-                                                  String(signalHistory[idx].invertedSignal ? 1 : 0) + "," +
-                                                  String(signalHistory[idx].repeatCount) + "," +
-                                                  String(signalHistory[idx].timestamp);
-                                sendBLENotify("history", histData);
-                                delay(50); // 给BLE时间发送
-                            }
-                        }
+                        // 设置标志，由主循环处理，避免在BLE回调任务中长时间阻塞导致栈溢出
+                        pendingHistoryQuery = true;
                     }
                     else
                     {
@@ -407,29 +394,20 @@ class CommandCallbacks : public BLECharacteristicCallbacks
                             syncHigh > 0 && syncLow > 0 && zeroHigh > 0 && zeroLow > 0 &&
                             oneHigh > 0 && oneLow > 0 && repeatCount > 0)
                         {
-                            RCSwitch::Protocol customProtocol = {
-                                pulseLength,
-                                {syncHigh, syncLow},
-                                {zeroHigh, zeroLow},
-                                {oneHigh, oneLow},
-                                invertedSignal};
-
-                            mySwitch.setProtocol(customProtocol);
-                            mySwitch.setRepeatTransmit(repeatCount);
-                            mySwitch.send(code, bitLength);
-
-                            Serial.print("BLE发送自定义433MHz信号: ");
-                            Serial.print(code);
-                            Serial.print(" (位长度: ");
-                            Serial.print(bitLength);
-                            Serial.print(", 脉宽: ");
-                            Serial.print(pulseLength);
-                            Serial.print(", 重发: ");
-                            Serial.print(repeatCount);
-                            Serial.println(")");
-
-                            String msg = "已发送: " + String(code);
-                            sendBLENotify("status", msg);
+                            // 存储发送参数，由主循环处理，避免在BLE回调任务中长时间占用导致栈溢出
+                            pendingSendParams.code = code;
+                            pendingSendParams.bitLength = bitLength;
+                            pendingSendParams.pulseLength = pulseLength;
+                            pendingSendParams.syncHigh = syncHigh;
+                            pendingSendParams.syncLow = syncLow;
+                            pendingSendParams.zeroHigh = zeroHigh;
+                            pendingSendParams.zeroLow = zeroLow;
+                            pendingSendParams.oneHigh = oneHigh;
+                            pendingSendParams.oneLow = oneLow;
+                            pendingSendParams.invertedSignal = invertedSignal;
+                            pendingSendParams.repeatCount = repeatCount;
+                            pendingSendReady = true;
+                            sendBLENotify("status", "发送中...");
                         }
                         else
                         {
@@ -645,6 +623,66 @@ void loop()
             if (pBLEServer)
             {
                 pBLEServer->disconnect(pBLEServer->getConnId());
+            }
+        }
+    }
+
+    // 处理待发送的433MHz信号（从BLE回调传递过来，避免在BLE任务中长时间阻塞）
+    if (pendingSendReady)
+    {
+        pendingSendReady = false;
+        RCSwitch::Protocol customProtocol = {
+            pendingSendParams.pulseLength,
+            {pendingSendParams.syncHigh, pendingSendParams.syncLow},
+            {pendingSendParams.zeroHigh, pendingSendParams.zeroLow},
+            {pendingSendParams.oneHigh, pendingSendParams.oneLow},
+            pendingSendParams.invertedSignal};
+        mySwitch.setProtocol(customProtocol);
+        mySwitch.setRepeatTransmit(pendingSendParams.repeatCount);
+        mySwitch.send(pendingSendParams.code, pendingSendParams.bitLength);
+        Serial.print("BLE发送自定义433MHz信号: ");
+        Serial.print(pendingSendParams.code);
+        Serial.print(" (位长度: ");
+        Serial.print(pendingSendParams.bitLength);
+        Serial.print(", 脉宽: ");
+        Serial.print(pendingSendParams.pulseLength);
+        Serial.print(", 重发: ");
+        Serial.print(pendingSendParams.repeatCount);
+        Serial.println(")");
+        String msg = "已发送: " + String(pendingSendParams.code);
+        sendBLENotify("status", msg);
+    }
+
+    // 处理历史记录查询（从BLE回调传递过来，避免在BLE任务中循环delay导致栈溢出）
+    if (pendingHistoryQuery && bleDeviceConnected)
+    {
+        pendingHistoryQuery = false;
+        if (historyCount == 0)
+        {
+            sendBLENotify("status", "无历史记录");
+        }
+        else
+        {
+            sendBLENotify("status", "历史记录: " + String(historyCount));
+            delay(50);
+            int startIdx = (historyCount < MAX_HISTORY) ? 0 : historyIndex;
+            for (int i = 0; i < historyCount; i++)
+            {
+                int idx = (startIdx + i) % MAX_HISTORY;
+                String histData = String(signalHistory[idx].code) + "," +
+                                  String(signalHistory[idx].bitLength) + "," +
+                                  String(signalHistory[idx].pulseLength) + "," +
+                                  String(signalHistory[idx].syncHigh) + "," +
+                                  String(signalHistory[idx].syncLow) + "," +
+                                  String(signalHistory[idx].zeroHigh) + "," +
+                                  String(signalHistory[idx].zeroLow) + "," +
+                                  String(signalHistory[idx].oneHigh) + "," +
+                                  String(signalHistory[idx].oneLow) + "," +
+                                  String(signalHistory[idx].invertedSignal ? 1 : 0) + "," +
+                                  String(signalHistory[idx].repeatCount) + "," +
+                                  String(signalHistory[idx].timestamp);
+                sendBLENotify("history", histData);
+                delay(50);
             }
         }
     }
