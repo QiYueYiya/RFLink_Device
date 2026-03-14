@@ -407,7 +407,6 @@ class CommandCallbacks : public BLECharacteristicCallbacks
                             pendingSendParams.invertedSignal = invertedSignal;
                             pendingSendParams.repeatCount = repeatCount;
                             pendingSendReady = true;
-                            sendBLENotify("status", "发送中...");
                         }
                         else
                         {
