@@ -554,11 +554,13 @@ void handleRFReceive()
             }
             else
             {
-                // 已连接到主机，直接发送完整自定义参数给主机
+                // 已连接到主机，直接发送完整自定义参数+时间戳给主机
+                uint64_t nowTs = timeOffsetSynced ? (millis() + timeOffset) : millis();
                 String dataStr = String(receivedCode) + "," + String(bitLength) + "," +
                                  String(pulseLength) + "," + String(syncHigh) + "," + String(syncLow) + "," +
                                  String(zeroHigh) + "," + String(zeroLow) + "," + String(oneHigh) + "," +
-                                 String(oneLow) + "," + String(invertedSignal ? 1 : 0) + "," + String(repeatCount);
+                                 String(oneLow) + "," + String(invertedSignal ? 1 : 0) + "," +
+                                 String(repeatCount) + "," + String(nowTs);
                 sendBLENotify("recv", dataStr);
             }
         }
