@@ -175,26 +175,32 @@ bool parseParamString(String paramStr, unsigned long &code, unsigned int &bitLen
     }
 
     // 2. 统一类型转换：从 unsigned long 转为目标变量类型
-    const unsigned long MAX_UINT = 65535UL;     // unsigned int / uint16_t 最大值
-    const unsigned long MAX_UINT8 = 255UL;      // uint8_t 最大值
+    const unsigned long MAX_UINT = 65535UL; // unsigned int / uint16_t 最大值
+    const unsigned long MAX_UINT8 = 255UL;  // uint8_t 最大值
     // code: unsigned long 无上限校验
     code = tempValues[0];
     // bitLength: unsigned int (0~65535)
-    if (tempValues[1] > MAX_UINT) return false;
+    if (tempValues[1] > MAX_UINT)
+        return false;
     bitLength = (unsigned int)tempValues[1];
     // pulseLength: uint16_t (0~65535)
-    if (tempValues[2] > MAX_UINT) return false;
+    if (tempValues[2] > MAX_UINT)
+        return false;
     pulseLength = (uint16_t)tempValues[2];
     // params[0~5]: uint8_t (0~255) 6个参数全部校验
-    for (int i = 0; i < 6; i++) {
-        if (tempValues[3 + i] > MAX_UINT8) return false;
+    for (int i = 0; i < 6; i++)
+    {
+        if (tempValues[3 + i] > MAX_UINT8)
+            return false;
         params[i] = (uint8_t)tempValues[3 + i];
     }
     // invertedSignal: bool (只能是 0 或 1)
-    if (tempValues[9] != 0 && tempValues[9] != 1) return false;
+    if (tempValues[9] != 0 && tempValues[9] != 1)
+        return false;
     invertedSignal = (bool)tempValues[9];
     // repeatCount: unsigned int (0~65535)
-    if (tempValues[10] > MAX_UINT) return false;
+    if (tempValues[10] > MAX_UINT)
+        return false;
     repeatCount = (unsigned int)tempValues[10];
 
     return true;
@@ -418,53 +424,56 @@ void processReceivedData()
             Serial.print(protocol);
             Serial.println(")");
 
-            // 只有未连接到主机时才保存历史记录（并做去重：若存在则仅更新时间戳，保留位置）
-            if (!bleDeviceConnected)
+            // 历史记录去重
+            bool found = false;
+            const uint32_t timestampNow = timeOffsetSynced ? (millis() + timeOffset) : millis();
+            for (int i = 0; i < historyCount; i++)
             {
-                // 检查是否已有相同信号，若有则仅更新时间戳
-                bool found = false;
-                for (int i = 0; i < historyCount; i++)
+                int idx = (historyCount < MAX_HISTORY) ? i : (historyIndex + i) % MAX_HISTORY;
+                if (signalHistory[idx].code == receivedCode)
                 {
-                    int idx = (historyCount < MAX_HISTORY) ? i : (historyIndex + i) % MAX_HISTORY;
-                    if (signalHistory[idx].code == receivedCode)
+                    if (timestampNow - signalHistory[idx].timestamp > 500) // 500毫秒外的重复：更新历史记录，并发送
                     {
                         signalHistory[idx].bitLength = bitLength;
                         signalHistory[idx].pulseLength = pulseLength;
                         memcpy(signalHistory[idx].params, params, 6);
                         signalHistory[idx].invertedSignal = invertedSignal;
                         signalHistory[idx].repeatCount = repeatCount;
-                        signalHistory[idx].timestamp = timeOffsetSynced ? (millis() + timeOffset) : millis();
-                        found = true;
+                        signalHistory[idx].timestamp = timestampNow;
                         break;
                     }
-                }
-
-                if (!found)
-                {
-                    // 保存到历史记录（环形缓冲）
-                    signalHistory[historyIndex].code = receivedCode;
-                    signalHistory[historyIndex].bitLength = bitLength;
-                    signalHistory[historyIndex].pulseLength = pulseLength;
-                    memcpy(signalHistory[historyIndex].params, params, 6);
-                    signalHistory[historyIndex].invertedSignal = invertedSignal;
-                    signalHistory[historyIndex].repeatCount = repeatCount;
-                    // 如果已同步时间则使用完整时间戳，否则仅保存millis()值供后续修正
-                    signalHistory[historyIndex].timestamp = timeOffsetSynced ? (millis() + timeOffset) : millis();
-                    historyIndex = (historyIndex + 1) % MAX_HISTORY;
-                    if (historyCount < MAX_HISTORY)
-                        historyCount++;
+                    // 500毫秒内的重复：仅更新时间戳，不发送
+                    signalHistory[idx].timestamp = timestampNow;
+                    found = true;
+                    break;
                 }
             }
-            else
+
+            if (!found)
             {
-                // 已连接到主机，直接发送完整自定义参数+时间戳给主机
-                uint64_t nowTs = timeOffsetSynced ? (millis() + timeOffset) : millis();
-                String dataStr = String(receivedCode) + "," + String(bitLength) + "," +
-                                 String(pulseLength) + "," + String(params[0]) + "," + String(params[1]) + "," +
-                                 String(params[2]) + "," + String(params[3]) + "," + String(params[4]) + "," +
-                                 String(params[5]) + "," + String(invertedSignal ? 1 : 0) + "," +
-                                 String(repeatCount) + "," + String(nowTs);
-                sendBLENotify("recv", dataStr);
+                // 2. 不重复：保存到历史
+                signalHistory[historyIndex].code = receivedCode;
+                signalHistory[historyIndex].bitLength = bitLength;
+                signalHistory[historyIndex].pulseLength = pulseLength;
+                memcpy(signalHistory[historyIndex].params, params, 6);
+                signalHistory[historyIndex].invertedSignal = invertedSignal;
+                signalHistory[historyIndex].repeatCount = repeatCount;
+                signalHistory[historyIndex].timestamp = timeOffsetSynced ? (millis() + timeOffset) : millis();
+                historyIndex = (historyIndex + 1) % MAX_HISTORY;
+                if (historyCount < MAX_HISTORY)
+                    historyCount++;
+
+                // 3. 只有 不重复的新信号+已连接蓝牙 才发送给主机
+                if (bleDeviceConnected)
+                {
+                    uint64_t nowTs = timeOffsetSynced ? (millis() + timeOffset) : millis();
+                    String dataStr = String(receivedCode) + "," + String(bitLength) + "," +
+                                     String(pulseLength) + "," + String(params[0]) + "," + String(params[1]) + "," +
+                                     String(params[2]) + "," + String(params[3]) + "," + String(params[4]) + "," +
+                                     String(params[5]) + "," + String(invertedSignal ? 1 : 0) + "," +
+                                     String(repeatCount) + "," + String(nowTs);
+                    sendBLENotify("recv", dataStr);
+                }
             }
         }
 
