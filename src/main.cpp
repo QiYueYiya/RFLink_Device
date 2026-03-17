@@ -7,9 +7,11 @@
 #include <OneButton.h>
 
 // 引脚定义
-#define RF_TRANSMIT_PIN 8 // 433MHz发射引脚
-#define RF_RECEIVE_PIN 6  // 433MHz接收引脚
-#define BUTTON_PIN 10     // 点动开关引脚
+#define RF_TRANSMIT_PIN 8    // 433MHz发射引脚
+#define RF_TRANSMIT_EN_PIN 9 // 433MHz发射模块使能引脚
+#define RF_RECEIVE_PIN 6     // 433MHz接收引脚
+#define RF_RECEIVE_EN_PIN 7  // 433MHz接收模块使能引脚
+#define BUTTON_PIN 10        // 点动开关引脚
 
 // BLE UUIDs
 #define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
@@ -573,6 +575,9 @@ void processPendingSend()
 {
     if (pendingSendReady)
     {
+        // 使能发射模块
+        digitalWrite(RF_TRANSMIT_EN_PIN, HIGH);
+        delay(10); // MOS管导通延时，确保模块上电
         pendingSendReady = false;
         RCSwitch::Protocol customProtocol = {
             pendingSendParams.pulseLength,
@@ -594,6 +599,8 @@ void processPendingSend()
         Serial.println(")");
         String msg = "已发送: " + String(pendingSendParams.code);
         sendBLENotify("status", msg);
+        // 关闭发射模块
+        digitalWrite(RF_TRANSMIT_EN_PIN, LOW);
     }
 }
 
@@ -674,12 +681,22 @@ void setup()
     Serial.println(deviceId);
 
     // 设置433MHz收发器
+    // 初始化发射/接收模块使能引脚（MOS管控制）
+    pinMode(RF_TRANSMIT_EN_PIN, OUTPUT);
+    digitalWrite(RF_TRANSMIT_EN_PIN, LOW); // 默认低电平关闭发射模块
+    pinMode(RF_RECEIVE_EN_PIN, OUTPUT);
+    digitalWrite(RF_RECEIVE_EN_PIN, HIGH); // 默认高电平使能
+
     mySwitch.enableTransmit(RF_TRANSMIT_PIN);
     mySwitch.enableReceive(RF_RECEIVE_PIN);
     Serial.print("发射引脚: GPIO");
     Serial.println(RF_TRANSMIT_PIN);
     Serial.print("接收引脚: GPIO");
     Serial.println(RF_RECEIVE_PIN);
+    Serial.print("发射模块使能引脚: GPIO");
+    Serial.println(RF_TRANSMIT_EN_PIN);
+    Serial.print("接收模块使能引脚: GPIO");
+    Serial.println(RF_RECEIVE_EN_PIN);
     Serial.println("433MHz收发器已初始化");
 
     // 初始化BLE
