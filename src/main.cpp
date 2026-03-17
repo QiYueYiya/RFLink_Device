@@ -19,7 +19,7 @@
 #define CHAR_COMMAND_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a1" // 命令特征 (Write) - 接收TEXT命令
 
 // 信号接收历史记录
-#define MAX_HISTORY 30 // 最多存储30条历史记录
+#define MAX_HISTORY 100 // 最多存储100条历史记录
 // 连接后等待时间同步超时时间（毫秒）
 #define TIME_SYNC_TIMEOUT_MS 3000
 
@@ -149,77 +149,55 @@ void sendBLENotify(const String &type, const String &data)
     pCharNotify->notify();
 }
 
-bool parseCsvToken(const String &input, int &cursor, String &token)
+bool parseParamString(String paramStr, unsigned long &code, unsigned int &bitLength, uint16_t &pulseLength, uint8_t params[6], bool &invertedSignal, unsigned int &repeatCount)
 {
-    if (cursor < 0 || cursor > input.length())
-        return false;
+    
+    // 局部变量，仅在函数内使用
+    int startIndex = 0;
+    int endIndex = 0;
+    unsigned long tempValues[11] = {0}; // 中间存储：全部先转为 unsigned long
+    int valueIndex = 0;
 
-    int commaPos = input.indexOf(',', cursor);
-    if (commaPos < 0)
+    // 1. 按逗号分割字符串，提取所有数值到中间临时数组
+    while (endIndex != -1 && valueIndex < 11)
     {
-        token = input.substring(cursor);
-        cursor = input.length() + 1;
+        endIndex = paramStr.indexOf(',', startIndex);
+        String field = paramStr.substring(startIndex, endIndex == -1 ? paramStr.length() : endIndex);
+        startIndex = endIndex + 1;
+        tempValues[valueIndex] = strtoul(field.c_str(), NULL, 10);
+        valueIndex++;
     }
-    else
+
+    // 校验字段数量是否完整（send + 11个参数）
+    if (valueIndex != 11)
     {
-        token = input.substring(cursor, commaPos);
-        cursor = commaPos + 1;
+        return false;
     }
 
-    token.trim();
-    return token.length() > 0;
-}
-
-bool parseUnsignedLongStrict(const String &token, unsigned long &value)
-{
-    char *endPtr = nullptr;
-    unsigned long parsed = strtoul(token.c_str(), &endPtr, 10);
-    if (endPtr == token.c_str() || *endPtr != '\0')
-        return false;
-    value = parsed;
-    return true;
-}
-
-bool parseUnsignedIntStrict(const String &token, unsigned int &value)
-{
-    unsigned long parsed = 0;
-    if (!parseUnsignedLongStrict(token, parsed) || parsed > 0xFFFF)
-        return false;
-    value = (unsigned int)parsed;
-    return true;
-}
-
-bool parseUInt16Strict(const String &token, uint16_t &value)
-{
-    unsigned long parsed = 0;
-    if (!parseUnsignedLongStrict(token, parsed) || parsed > 0xFFFF)
-        return false;
-    value = (uint16_t)parsed;
-    return true;
-}
-
-bool parseUInt8Strict(const String &token, uint8_t &value)
-{
-    unsigned long parsed = 0;
-    if (!parseUnsignedLongStrict(token, parsed) || parsed > 0xFF)
-        return false;
-    value = (uint8_t)parsed;
-    return true;
-}
-
-bool parseBool01(const String &token, bool &value)
-{
-    if (token == "0")
-    {
-        value = false;
-        return true;
+    // 2. 统一类型转换：从 unsigned long 转为目标变量类型
+    const unsigned long MAX_UINT = 65535UL;     // unsigned int / uint16_t 最大值
+    const unsigned long MAX_UINT8 = 255UL;      // uint8_t 最大值
+    // code: unsigned long 无上限校验
+    code = tempValues[0];
+    // bitLength: unsigned int (0~65535)
+    if (tempValues[1] > MAX_UINT) return false;
+    bitLength = (unsigned int)tempValues[1];
+    // pulseLength: uint16_t (0~65535)
+    if (tempValues[2] > MAX_UINT) return false;
+    pulseLength = (uint16_t)tempValues[2];
+    // params[0~5]: uint8_t (0~255) 6个参数全部校验
+    for (int i = 0; i < 6; i++) {
+        if (tempValues[3 + i] > MAX_UINT8) return false;
+        params[i] = (uint8_t)tempValues[3 + i];
     }
-    if (token == "1")
-    {
-        value = true;
-        return true;
-    }
-    return false;
+    // invertedSignal: bool (只能是 0 或 1)
+    if (tempValues[9] != 0 && tempValues[9] != 1) return false;
+    invertedSignal = (bool)tempValues[9];
+    // repeatCount: unsigned int (0~65535)
+    if (tempValues[10] > MAX_UINT) return false;
+    repeatCount = (unsigned int)tempValues[10];
+
+    return true;
 }
 
 // BLE服务器回调
@@ -325,8 +303,7 @@ class CommandCallbacks : public BLECharacteristicCallbacks
                 // send命令 - 发送RF信号
                 else if (cmd == "send")
                 {
-                    int cursor = firstComma + 1;
-                    String token;
+                    String paramStr = cmdStr.substring(firstComma + 1);
 
                     unsigned long code = 0;
                     unsigned int bitLength = 0;
@@ -335,18 +312,9 @@ class CommandCallbacks : public BLECharacteristicCallbacks
                     bool invertedSignal = false;
                     unsigned int repeatCount = 0;
 
-                    bool ok = true;
-                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedLongStrict(token, code);
-                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedIntStrict(token, bitLength);
-                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUInt16Strict(token, pulseLength);
-                    for (int i = 0; i < 6; ++i)
-                    {
-                        ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUInt8Strict(token, params[i]);
-                    }
-                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseBool01(token, invertedSignal);
-                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedIntStrict(token, repeatCount);
+                    bool result = parseParamString(paramStr, code, bitLength, pulseLength, params, invertedSignal, repeatCount);
 
-                    if (ok)
+                    if (result)
                     {
                         bool paramsValid = true;
                         for (int i = 0; i < 6; ++i)
