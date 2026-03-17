@@ -50,14 +50,8 @@ struct SignalHistory
 {
     unsigned long code;
     unsigned int bitLength;
-    unsigned int protocol;
     unsigned int pulseLength;
-    unsigned int syncHigh;
-    unsigned int syncLow;
-    unsigned int zeroHigh;
-    unsigned int zeroLow;
-    unsigned int oneHigh;
-    unsigned int oneLow;
+    uint8_t params[6]; // syncHigh, syncLow, zeroHigh, zeroLow, oneHigh, oneLow
     bool invertedSignal;
     unsigned int repeatCount;
     uint64_t timestamp; // 使用uint64_t存储毫秒级时间戳，避免溢出
@@ -72,9 +66,7 @@ struct PendingSendParams
     unsigned long code;
     unsigned int bitLength;
     uint16_t pulseLength;
-    uint8_t syncHigh, syncLow;
-    uint8_t zeroHigh, zeroLow;
-    uint8_t oneHigh, oneLow;
+    uint8_t params[6]; // syncHigh, syncLow, zeroHigh, zeroLow, oneHigh, oneLow
     bool invertedSignal;
     unsigned int repeatCount;
 };
@@ -82,74 +74,45 @@ PendingSendParams pendingSendParams;
 volatile bool pendingSendReady = false;
 volatile bool pendingHistoryQuery = false;
 
-void getCustomParamsFromProtocol(unsigned int protocolId, unsigned int pulseLength, unsigned int &syncHigh, unsigned int &syncLow,
-                                 unsigned int &zeroHigh, unsigned int &zeroLow, unsigned int &oneHigh, unsigned int &oneLow,
-                                 bool &invertedSignal)
+void getCustomParamsFromProtocol(unsigned int protocolId, unsigned int pulseLength, uint8_t params[6], bool &invertedSignal)
 {
+    // params: [syncHigh, syncLow, zeroHigh, zeroLow, oneHigh, oneLow]
+    const uint8_t arr1[6] = {1, 31, 1, 3, 3, 1};
+    const uint8_t arr2[6] = {1, 10, 1, 2, 2, 1};
+    const uint8_t arr3[6] = {30, 71, 4, 11, 9, 6};
+    const uint8_t arr4[6] = {1, 6, 1, 3, 3, 1};
+    const uint8_t arr5[6] = {6, 14, 1, 2, 2, 1};
+    const uint8_t arr6[6] = {23, 1, 1, 2, 2, 1};
+    const uint8_t arr7[6] = {2, 62, 1, 6, 6, 1};
     switch (protocolId)
     {
     case 2:
-        syncHigh = 1;
-        syncLow = 10;
-        zeroHigh = 1;
-        zeroLow = 2;
-        oneHigh = 2;
-        oneLow = 1;
+        memcpy(params, arr2, 6);
         invertedSignal = false;
         break;
     case 3:
-        syncHigh = 30;
-        syncLow = 71;
-        zeroHigh = 4;
-        zeroLow = 11;
-        oneHigh = 9;
-        oneLow = 6;
+        memcpy(params, arr3, 6);
         invertedSignal = false;
         break;
     case 4:
-        syncHigh = 1;
-        syncLow = 6;
-        zeroHigh = 1;
-        zeroLow = 3;
-        oneHigh = 3;
-        oneLow = 1;
+        memcpy(params, arr4, 6);
         invertedSignal = false;
         break;
     case 5:
-        syncHigh = 6;
-        syncLow = 14;
-        zeroHigh = 1;
-        zeroLow = 2;
-        oneHigh = 2;
-        oneLow = 1;
+        memcpy(params, arr5, 6);
         invertedSignal = false;
         break;
     case 6:
-        syncHigh = 23;
-        syncLow = 1;
-        zeroHigh = 1;
-        zeroLow = 2;
-        oneHigh = 2;
-        oneLow = 1;
+        memcpy(params, arr6, 6);
         invertedSignal = true;
         break;
     case 7:
-        syncHigh = 2;
-        syncLow = 62;
-        zeroHigh = 1;
-        zeroLow = 6;
-        oneHigh = 6;
-        oneLow = 1;
+        memcpy(params, arr7, 6);
         invertedSignal = false;
         break;
     case 1:
     default:
-        syncHigh = 1;
-        syncLow = 31;
-        zeroHigh = 1;
-        zeroLow = 3;
-        oneHigh = 3;
-        oneLow = 1;
+        memcpy(params, arr1, 6);
         invertedSignal = false;
         break;
     }
@@ -368,12 +331,7 @@ class CommandCallbacks : public BLECharacteristicCallbacks
                     unsigned long code = 0;
                     unsigned int bitLength = 0;
                     uint16_t pulseLength = 0;
-                    uint8_t syncHigh = 0;
-                    uint8_t syncLow = 0;
-                    uint8_t zeroHigh = 0;
-                    uint8_t zeroLow = 0;
-                    uint8_t oneHigh = 0;
-                    uint8_t oneLow = 0;
+                    uint8_t params[6] = {0}; // syncHigh, syncLow, zeroHigh, zeroLow, oneHigh, oneLow
                     bool invertedSignal = false;
                     unsigned int repeatCount = 0;
 
@@ -381,31 +339,28 @@ class CommandCallbacks : public BLECharacteristicCallbacks
                     ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedLongStrict(token, code);
                     ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedIntStrict(token, bitLength);
                     ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUInt16Strict(token, pulseLength);
-                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUInt8Strict(token, syncHigh);
-                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUInt8Strict(token, syncLow);
-                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUInt8Strict(token, zeroHigh);
-                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUInt8Strict(token, zeroLow);
-                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUInt8Strict(token, oneHigh);
-                    ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUInt8Strict(token, oneLow);
+                    for (int i = 0; i < 6; ++i)
+                    {
+                        ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUInt8Strict(token, params[i]);
+                    }
                     ok = ok && parseCsvToken(cmdStr, cursor, token) && parseBool01(token, invertedSignal);
                     ok = ok && parseCsvToken(cmdStr, cursor, token) && parseUnsignedIntStrict(token, repeatCount);
 
                     if (ok)
                     {
-                        if (code > 0 && bitLength > 0 && bitLength <= 64 && pulseLength > 0 &&
-                            syncHigh > 0 && syncLow > 0 && zeroHigh > 0 && zeroLow > 0 &&
-                            oneHigh > 0 && oneLow > 0 && repeatCount > 0)
+                        bool paramsValid = true;
+                        for (int i = 0; i < 6; ++i)
+                        {
+                            if (params[i] == 0)
+                                paramsValid = false;
+                        }
+                        if (code > 0 && bitLength > 0 && bitLength <= 64 && pulseLength > 0 && paramsValid && repeatCount > 0)
                         {
                             // 存储发送参数，由主循环处理，避免在BLE回调任务中长时间占用导致栈溢出
                             pendingSendParams.code = code;
                             pendingSendParams.bitLength = bitLength;
                             pendingSendParams.pulseLength = pulseLength;
-                            pendingSendParams.syncHigh = syncHigh;
-                            pendingSendParams.syncLow = syncLow;
-                            pendingSendParams.zeroHigh = zeroHigh;
-                            pendingSendParams.zeroLow = zeroLow;
-                            pendingSendParams.oneHigh = oneHigh;
-                            pendingSendParams.oneLow = oneLow;
+                            memcpy(pendingSendParams.params, params, 6);
                             pendingSendParams.invertedSignal = invertedSignal;
                             pendingSendParams.repeatCount = repeatCount;
                             pendingSendReady = true;
@@ -470,7 +425,7 @@ void setupBLE()
 }
 
 // 处理433MHz接收
-void handleRFReceive()
+void processReceivedData()
 {
     if (mySwitch.available())
     {
@@ -479,20 +434,11 @@ void handleRFReceive()
         unsigned int bitLength = mySwitch.getReceivedBitlength();
         unsigned int protocol = mySwitch.getReceivedProtocol();
         unsigned int pulseLength = mySwitch.getReceivedDelay();
-        unsigned int syncHigh = 1;
-        unsigned int syncLow = 31;
-        unsigned int zeroHigh = 1;
-        unsigned int zeroLow = 3;
-        unsigned int oneHigh = 3;
-        unsigned int oneLow = 1;
+        uint8_t params[6] = {1, 31, 1, 3, 3, 1}; // syncHigh, syncLow, zeroHigh, zeroLow, oneHigh, oneLow
         bool invertedSignal = false;
         unsigned int repeatCount = 10;
 
-        getCustomParamsFromProtocol(protocol, pulseLength, syncHigh, syncLow, zeroHigh, zeroLow, oneHigh, oneLow, invertedSignal);
-        if (pulseLength == 0)
-        {
-            pulseLength = 350;
-        }
+        getCustomParamsFromProtocol(protocol, pulseLength, params, invertedSignal);
 
         if (receivedCode >= 1000)
         {
@@ -515,14 +461,8 @@ void handleRFReceive()
                     if (signalHistory[idx].code == receivedCode)
                     {
                         signalHistory[idx].bitLength = bitLength;
-                        signalHistory[idx].protocol = protocol;
                         signalHistory[idx].pulseLength = pulseLength;
-                        signalHistory[idx].syncHigh = syncHigh;
-                        signalHistory[idx].syncLow = syncLow;
-                        signalHistory[idx].zeroHigh = zeroHigh;
-                        signalHistory[idx].zeroLow = zeroLow;
-                        signalHistory[idx].oneHigh = oneHigh;
-                        signalHistory[idx].oneLow = oneLow;
+                        memcpy(signalHistory[idx].params, params, 6);
                         signalHistory[idx].invertedSignal = invertedSignal;
                         signalHistory[idx].repeatCount = repeatCount;
                         signalHistory[idx].timestamp = timeOffsetSynced ? (millis() + timeOffset) : millis();
@@ -536,14 +476,8 @@ void handleRFReceive()
                     // 保存到历史记录（环形缓冲）
                     signalHistory[historyIndex].code = receivedCode;
                     signalHistory[historyIndex].bitLength = bitLength;
-                    signalHistory[historyIndex].protocol = protocol;
                     signalHistory[historyIndex].pulseLength = pulseLength;
-                    signalHistory[historyIndex].syncHigh = syncHigh;
-                    signalHistory[historyIndex].syncLow = syncLow;
-                    signalHistory[historyIndex].zeroHigh = zeroHigh;
-                    signalHistory[historyIndex].zeroLow = zeroLow;
-                    signalHistory[historyIndex].oneHigh = oneHigh;
-                    signalHistory[historyIndex].oneLow = oneLow;
+                    memcpy(signalHistory[historyIndex].params, params, 6);
                     signalHistory[historyIndex].invertedSignal = invertedSignal;
                     signalHistory[historyIndex].repeatCount = repeatCount;
                     // 如果已同步时间则使用完整时间戳，否则仅保存millis()值供后续修正
@@ -558,9 +492,9 @@ void handleRFReceive()
                 // 已连接到主机，直接发送完整自定义参数+时间戳给主机
                 uint64_t nowTs = timeOffsetSynced ? (millis() + timeOffset) : millis();
                 String dataStr = String(receivedCode) + "," + String(bitLength) + "," +
-                                 String(pulseLength) + "," + String(syncHigh) + "," + String(syncLow) + "," +
-                                 String(zeroHigh) + "," + String(zeroLow) + "," + String(oneHigh) + "," +
-                                 String(oneLow) + "," + String(invertedSignal ? 1 : 0) + "," +
+                                 String(pulseLength) + "," + String(params[0]) + "," + String(params[1]) + "," +
+                                 String(params[2]) + "," + String(params[3]) + "," + String(params[4]) + "," +
+                                 String(params[5]) + "," + String(invertedSignal ? 1 : 0) + "," +
                                  String(repeatCount) + "," + String(nowTs);
                 sendBLENotify("recv", dataStr);
             }
@@ -571,7 +505,7 @@ void handleRFReceive()
 }
 
 // 处理待发送的433MHz信号（从BLE回调传递过来，避免在BLE任务中长时间阻塞）
-void processPendingSend()
+void processSendData()
 {
     if (pendingSendReady)
     {
@@ -579,11 +513,12 @@ void processPendingSend()
         digitalWrite(RF_TRANSMIT_EN_PIN, HIGH);
         delay(10); // MOS管导通延时，确保模块上电
         pendingSendReady = false;
+        // 适配 params[6] 构造协议
         RCSwitch::Protocol customProtocol = {
             pendingSendParams.pulseLength,
-            {pendingSendParams.syncHigh, pendingSendParams.syncLow},
-            {pendingSendParams.zeroHigh, pendingSendParams.zeroLow},
-            {pendingSendParams.oneHigh, pendingSendParams.oneLow},
+            {pendingSendParams.params[0], pendingSendParams.params[1]}, // syncHigh, syncLow
+            {pendingSendParams.params[2], pendingSendParams.params[3]}, // zeroHigh, zeroLow
+            {pendingSendParams.params[4], pendingSendParams.params[5]}, // oneHigh, oneLow
             pendingSendParams.invertedSignal};
         mySwitch.setProtocol(customProtocol);
         mySwitch.setRepeatTransmit(pendingSendParams.repeatCount);
@@ -605,7 +540,7 @@ void processPendingSend()
 }
 
 // 处理历史记录查询（从BLE回调传递过来，避免在BLE任务中循环delay导致栈溢出）
-void processPendingHistoryQuery()
+void processHistoryQueryData()
 {
     if (pendingHistoryQuery && bleDeviceConnected)
     {
@@ -625,12 +560,12 @@ void processPendingHistoryQuery()
                 String histData = String(signalHistory[idx].code) + "," +
                                   String(signalHistory[idx].bitLength) + "," +
                                   String(signalHistory[idx].pulseLength) + "," +
-                                  String(signalHistory[idx].syncHigh) + "," +
-                                  String(signalHistory[idx].syncLow) + "," +
-                                  String(signalHistory[idx].zeroHigh) + "," +
-                                  String(signalHistory[idx].zeroLow) + "," +
-                                  String(signalHistory[idx].oneHigh) + "," +
-                                  String(signalHistory[idx].oneLow) + "," +
+                                  String(signalHistory[idx].params[0]) + "," +
+                                  String(signalHistory[idx].params[1]) + "," +
+                                  String(signalHistory[idx].params[2]) + "," +
+                                  String(signalHistory[idx].params[3]) + "," +
+                                  String(signalHistory[idx].params[4]) + "," +
+                                  String(signalHistory[idx].params[5]) + "," +
                                   String(signalHistory[idx].invertedSignal ? 1 : 0) + "," +
                                   String(signalHistory[idx].repeatCount) + "," +
                                   String(signalHistory[idx].timestamp);
@@ -714,14 +649,14 @@ void loop()
     // 处理按键
     button.tick();
 
+    // 处理BLE连接状态变化
     processBLEConnectionState();
-
+    // 处理接收到的433MHz信号
+    processReceivedData();
     // 处理待发送的433MHz信号
-    processPendingSend();
+    processSendData();
     // 处理待处理的历史记录查询
-    processPendingHistoryQuery();
-    // 处理433MHz接收
-    handleRFReceive();
+    processHistoryQueryData();
 
     delay(10);
 }
