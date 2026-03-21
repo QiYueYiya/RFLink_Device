@@ -626,6 +626,7 @@ void processBLEConnectionState()
             if (pBLEServer)
             {
                 pBLEServer->disconnect(pBLEServer->getConnId());
+                bleDeviceConnected = false; // =防止主循环重复触发断开
             }
         }
     }
