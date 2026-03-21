@@ -513,13 +513,15 @@ void processReceivedData()
                 // 3. 只有 不重复的新信号+已连接蓝牙 才发送给主机
                 if (bleDeviceConnected)
                 {
+                    char dataBuffer[128];
                     uint64_t nowTs = timeOffsetSynced ? (millis() + timeOffset) : millis();
-                    String dataStr = String(receivedCode) + "," + String(bitLength) + "," +
-                                     String(pulseLength) + "," + String(params[0]) + "," + String(params[1]) + "," +
-                                     String(params[2]) + "," + String(params[3]) + "," + String(params[4]) + "," +
-                                     String(params[5]) + "," + String(invertedSignal ? 1 : 0) + "," +
-                                     String(repeatCount) + "," + String(nowTs);
-                    sendBLENotify("recv", dataStr);
+
+                    snprintf(dataBuffer, sizeof(dataBuffer), "%lu,%u,%u,%d,%d,%d,%d,%d,%d,%d,%u,%llu",
+                            receivedCode, bitLength, pulseLength, 
+                            params[0], params[1], params[2], params[3], params[4], params[5], 
+                            invertedSignal ? 1 : 0, repeatCount, nowTs);
+
+                    sendBLENotify("recv", String(dataBuffer));
                 }
             }
         }
@@ -578,22 +580,30 @@ void processHistoryQueryData()
             sendBLENotify("status", "历史记录: " + String(historyCount));
             delay(50);
             int startIdx = (historyCount < MAX_HISTORY) ? 0 : historyIndex;
+
+            // 定义一个足够大的字符数组作为格式化缓冲区
+            char dataBuffer[256];
+
             for (int i = 0; i < historyCount; i++)
             {
                 int idx = (startIdx + i) % MAX_HISTORY;
-                String histData = String(signalHistory[idx].code) + "," +
-                                  String(signalHistory[idx].bitLength) + "," +
-                                  String(signalHistory[idx].pulseLength) + "," +
-                                  String(signalHistory[idx].params[0]) + "," +
-                                  String(signalHistory[idx].params[1]) + "," +
-                                  String(signalHistory[idx].params[2]) + "," +
-                                  String(signalHistory[idx].params[3]) + "," +
-                                  String(signalHistory[idx].params[4]) + "," +
-                                  String(signalHistory[idx].params[5]) + "," +
-                                  String(signalHistory[idx].invertedSignal ? 1 : 0) + "," +
-                                  String(signalHistory[idx].repeatCount) + "," +
-                                  String(signalHistory[idx].timestamp);
-                sendBLENotify("history", histData);
+                // 使用 snprintf 安全地格式化字符串，避免 String 拼接带来的内存碎片
+                // 注意：uint64_t 建议强制转换为 unsigned long long 配合 %llu 使用以保证跨平台兼容性
+                snprintf(dataBuffer, sizeof(dataBuffer), "%lu,%u,%u,%d,%d,%d,%d,%d,%d,%d,%u,%llu",
+                         signalHistory[idx].code,
+                         signalHistory[idx].bitLength,
+                         signalHistory[idx].pulseLength,
+                         signalHistory[idx].params[0],
+                         signalHistory[idx].params[1],
+                         signalHistory[idx].params[2],
+                         signalHistory[idx].params[3],
+                         signalHistory[idx].params[4],
+                         signalHistory[idx].params[5],
+                         signalHistory[idx].invertedSignal ? 1 : 0,
+                         signalHistory[idx].repeatCount,
+                         (unsigned long long)signalHistory[idx].timestamp);
+
+                sendBLENotify("history", String(dataBuffer));
                 delay(50);
             }
         }
