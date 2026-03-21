@@ -7,10 +7,10 @@
 #include <OneButton.h>
 
 // 引脚定义
-#define RF_TRANSMIT_PIN 8    // 433MHz发射引脚
-#define RF_TRANSMIT_EN_PIN 9 // 433MHz发射模块使能引脚
-#define RF_RECEIVE_PIN 6     // 433MHz接收引脚
-#define RF_RECEIVE_EN_PIN 7  // 433MHz接收模块使能引脚
+#define RF_TRANSMIT_PIN 6    // 433MHz发射引脚
+#define RF_TRANSMIT_EN_PIN 7 // 433MHz发射模块使能引脚
+#define RF_RECEIVE_PIN 9     // 433MHz接收引脚
+#define RF_RECEIVE_EN_PIN 8  // 433MHz接收模块使能引脚
 #define BUTTON_PIN 10        // 点动开关引脚
 
 // BLE UUIDs
@@ -24,7 +24,7 @@
 #define TIME_SYNC_TIMEOUT_MS 3000
 
 // 设备信息
-String deviceId = "RFTransmitter";
+String deviceId = "RFLink";
 
 // 全局对象
 RCSwitch mySwitch = RCSwitch();
@@ -124,8 +124,55 @@ void getCustomParamsFromProtocol(unsigned int protocolId, unsigned int pulseLeng
     }
 }
 
+// RF发射使能与引脚模式切换封装
+void setRfTransmitEnable(bool enable)
+{
+    if (enable)
+    {
+        digitalWrite(RF_TRANSMIT_EN_PIN, HIGH);
+        mySwitch.enableTransmit(RF_TRANSMIT_PIN);
+        Serial.println("RF发射模块已开启");
+    }
+    else
+    {
+        mySwitch.disableTransmit();
+        pinMode(RF_TRANSMIT_PIN, INPUT);
+        digitalWrite(RF_TRANSMIT_EN_PIN, LOW);
+        Serial.println("RF发射模块已关闭");
+    }
+}
+
+// RF接收使能与引脚模式切换封装
+void setRfReceiveEnable(bool enable)
+{
+    if (enable)
+    {
+        digitalWrite(RF_RECEIVE_EN_PIN, HIGH);
+        mySwitch.enableReceive(RF_RECEIVE_PIN);
+        Serial.println("RF接收模块已开启");
+    }
+    else
+    {
+        mySwitch.disableReceive();
+        pinMode(RF_RECEIVE_PIN, INPUT);
+        digitalWrite(RF_RECEIVE_EN_PIN, LOW);
+        Serial.println("RF接收模块已关闭");
+    }
+}
+
+// 按键单击回调：切换RF发射接收使能
+void onButtonClick()
+{
+    Serial.println("按键单击");
+}
+
+void onButtonDoubleClick()
+{
+    Serial.println("按键双击");
+}
+
 // 按键长按回调
-void onResetLongPress()
+void onButtonLongPressStop()
 {
     Serial.println("按键长按5秒，重启设备");
     delay(50);
@@ -151,7 +198,7 @@ void sendBLENotify(const String &type, const String &data)
 
 bool parseParamString(String paramStr, unsigned long &code, unsigned int &bitLength, uint16_t &pulseLength, uint8_t params[6], bool &invertedSignal, unsigned int &repeatCount)
 {
-    
+
     // 局部变量，仅在函数内使用
     int startIndex = 0;
     int endIndex = 0;
@@ -487,7 +534,7 @@ void processSendData()
     if (pendingSendReady)
     {
         // 使能发射模块
-        digitalWrite(RF_TRANSMIT_EN_PIN, HIGH);
+        setRfTransmitEnable(true);
         delay(10); // MOS管导通延时，确保模块上电
         pendingSendReady = false;
         // 适配 params[6] 构造协议
@@ -512,7 +559,7 @@ void processSendData()
         String msg = "已发送: " + String(pendingSendParams.code);
         sendBLENotify("status", msg);
         // 关闭发射模块
-        digitalWrite(RF_TRANSMIT_EN_PIN, LOW);
+        setRfTransmitEnable(false);
     }
 }
 
@@ -591,22 +638,18 @@ void setup()
     Serial.println("\n\n=== RF 433MHz 控制器启动 ===");
     Serial.print("设备ID: ");
     Serial.println(deviceId);
-
-    // 设置433MHz收发器
-    // 初始化发射/接收模块使能引脚（MOS管控制）
+    // 初始化433MHz发射模块
     pinMode(RF_TRANSMIT_EN_PIN, OUTPUT);
-    digitalWrite(RF_TRANSMIT_EN_PIN, LOW); // 默认低电平关闭发射模块
-    pinMode(RF_RECEIVE_EN_PIN, OUTPUT);
-    digitalWrite(RF_RECEIVE_EN_PIN, HIGH); // 默认高电平使能
-
-    mySwitch.enableTransmit(RF_TRANSMIT_PIN);
-    mySwitch.enableReceive(RF_RECEIVE_PIN);
+    setRfTransmitEnable(false); // 默认关闭发射模块
     Serial.print("发射引脚: GPIO");
     Serial.println(RF_TRANSMIT_PIN);
-    Serial.print("接收引脚: GPIO");
-    Serial.println(RF_RECEIVE_PIN);
     Serial.print("发射模块使能引脚: GPIO");
     Serial.println(RF_TRANSMIT_EN_PIN);
+    // 初始化433MHz接收模块
+    pinMode(RF_RECEIVE_EN_PIN, OUTPUT);
+    setRfReceiveEnable(true); // 默认开启接收模块
+    Serial.print("接收引脚: GPIO");
+    Serial.println(RF_RECEIVE_PIN);
     Serial.print("接收模块使能引脚: GPIO");
     Serial.println(RF_RECEIVE_EN_PIN);
     Serial.println("433MHz收发器已初始化");
@@ -614,9 +657,11 @@ void setup()
     // 初始化BLE
     setupBLE();
 
-    // 初始化按键（长按5秒重启）
+    // 初始化按键
+    button.attachClick(onButtonClick);
+    button.attachDoubleClick(onButtonDoubleClick);
     button.setPressMs(5000);
-    button.attachLongPressStop(onResetLongPress);
+    button.attachLongPressStop(onButtonLongPressStop);
 
     Serial.println("\n=== 初始化完成 ===\n");
 }
