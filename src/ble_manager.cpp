@@ -1,6 +1,7 @@
 #include "ble_manager.h"
 
 #include <cstring>
+#include <cstdlib>
 
 #include <BLE2902.h>
 #include <BLEDevice.h>
@@ -165,23 +166,17 @@ class CommandCallbacks : public BLECharacteristicCallbacks {
 
         if (cmd == "time") {
             const String timeText = cmdStr.substring(firstComma + 1);
-            const bool ok = applyTimeSyncFromCommand(
-                timeText,
-                runtime.timeOffsetMs,
-                runtime.timeOffsetSynced,
-                runtime.timeSyncReceived,
-                runtime.signalHistory,
-                runtime.historyCount,
-                runtime.historyIndex);
-
-            if (!ok) {
+            const char *raw = timeText.c_str();
+            char *endPtr = nullptr;
+            const unsigned long long receivedTime = strtoull(raw, &endPtr, 10);
+            if (raw == endPtr || (endPtr != nullptr && *endPtr != '\0') || receivedTime == 0ULL) {
                 bleSendNotify(runtime, "status", "错误: 时间戳无效");
                 return;
             }
 
-            Serial.print("时间偏移(毫秒): ");
-            Serial.println(static_cast<long long>(runtime.timeOffsetMs));
-            bleSendNotify(runtime, "status", "时间已同步");
+            // 时间同步放到主循环执行，避免 BLE 回调任务（BTC_TASK）堆栈被复杂逻辑占满。
+            runtime.pendingTimeSyncValue = static_cast<uint64_t>(receivedTime);
+            runtime.pendingTimeSync = true;
             return;
         }
 
@@ -329,6 +324,33 @@ void bleProcessConnectionState(DeviceRuntime &runtime) {
             }
         }
     }
+}
+
+void bleProcessPendingTimeSync(DeviceRuntime &runtime) {
+    if (!runtime.pendingTimeSync) {
+        return;
+    }
+
+    runtime.pendingTimeSync = false;
+    const bool ok = applyTimeSyncFromCommand(
+        String(runtime.pendingTimeSyncValue),
+        runtime.timeOffsetMs,
+        runtime.timeOffsetSynced,
+        runtime.timeSyncReceived,
+        runtime.signalHistory,
+        runtime.historyCount,
+        runtime.historyIndex);
+
+    if (!ok) {
+        bleSendNotify(runtime, "status", "错误: 时间戳无效");
+        return;
+    }
+
+    if (kEnableVerboseRuntimeLog) {
+        Serial.print("时间偏移(毫秒): ");
+        Serial.println(static_cast<long long>(runtime.timeOffsetMs));
+    }
+    bleSendNotify(runtime, "status", "时间已同步");
 }
 
 void bleProcessHistoryQuery(DeviceRuntime &runtime) {

@@ -28,6 +28,8 @@ struct DeviceRuntime {
     PendingSendParams pendingSendParams{};
     volatile bool pendingSendReady = false;
     volatile bool pendingHistoryQuery = false;
+    volatile bool pendingTimeSync = false;
+    uint64_t pendingTimeSyncValue = 0;
 
     bool historyQueryInProgress = false;
     int historyQueryCursor = 0;

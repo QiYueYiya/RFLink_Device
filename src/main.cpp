@@ -48,6 +48,7 @@ void loop() {
 
     // 主循环只做调度，复杂逻辑已经下沉到 BLE/RF 模块。
     bleProcessConnectionState(g_runtime);
+    bleProcessPendingTimeSync(g_runtime);
     rfProcessReceivedData(g_runtime, g_rfSwitch);
     rfProcessSendData(g_runtime, g_rfSwitch);
     bleProcessHistoryQuery(g_runtime);
