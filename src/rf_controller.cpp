@@ -32,6 +32,16 @@ void rfSetReceiveEnable(RCSwitch &rfSwitch, bool enable) {
     }
 }
 
+void rfSyncTransmitStateWithBle(DeviceRuntime &runtime, RCSwitch &rfSwitch) {
+    const bool shouldEnable = runtime.bleDeviceConnected;
+    if (shouldEnable == runtime.rfTransmitEnabledByBle) {
+        return;
+    }
+
+    runtime.rfTransmitEnabledByBle = shouldEnable;
+    rfSetTransmitEnable(rfSwitch, shouldEnable);
+}
+
 void rfProcessReceivedData(DeviceRuntime &runtime, RCSwitch &rfSwitch) {
     if (!rfSwitch.available()) {
         return;
@@ -106,9 +116,15 @@ void rfProcessSendData(DeviceRuntime &runtime, RCSwitch &rfSwitch) {
         return;
     }
 
+    if (!runtime.rfTransmitEnabledByBle) {
+        runtime.pendingSendReady = false;
+        if (kEnableVerboseRuntimeLog) {
+            Serial.println("蓝牙未连接，忽略待发送任务");
+        }
+        return;
+    }
+
     runtime.pendingSendReady = false;
-    rfSetTransmitEnable(rfSwitch, true);
-    delay(10);
 
     // params[6] -> RCSwitch::Protocol 的一一映射。
     RCSwitch::Protocol customProtocol = {
@@ -137,5 +153,4 @@ void rfProcessSendData(DeviceRuntime &runtime, RCSwitch &rfSwitch) {
     char statusBuffer[48];
     snprintf(statusBuffer, sizeof(statusBuffer), "已发送: %lu", runtime.pendingSendParams.code);
     bleSendNotify(runtime, "status", statusBuffer);
-    rfSetTransmitEnable(rfSwitch, false);
 }

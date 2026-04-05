@@ -30,6 +30,7 @@ struct DeviceRuntime {
     volatile bool pendingHistoryQuery = false;
     volatile bool pendingTimeSync = false;
     uint64_t pendingTimeSyncValue = 0;
+    bool rfTransmitEnabledByBle = false;
 
     bool historyQueryInProgress = false;
     int historyQueryCursor = 0;
