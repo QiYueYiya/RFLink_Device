@@ -1,16 +1,11 @@
 #include <Arduino.h>
 #include <RCSwitch.h>
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
+#include <NimBLEDevice.h>
 #include <OneButton.h>
 
 // 引脚定义
-#define RF_TRANSMIT_PIN 6    // 433MHz发射引脚
-#define RF_TRANSMIT_EN_PIN 7 // 433MHz发射模块使能引脚
-#define RF_RECEIVE_PIN 9     // 433MHz接收引脚
-#define RF_RECEIVE_EN_PIN 8  // 433MHz接收模块使能引脚
+#define RF_TRANSMIT_PIN 9    // 433MHz发射引脚
+#define RF_RECEIVE_PIN 8     // 433MHz接收引脚
 #define BUTTON_PIN 10        // 点动开关引脚
 
 // BLE UUIDs
@@ -31,11 +26,12 @@ RCSwitch mySwitch = RCSwitch();
 OneButton button(BUTTON_PIN, true, true);
 
 // BLE对象
-BLEServer *pBLEServer = nullptr;
-BLECharacteristic *pCharNotify = nullptr;  // 通知特征
-BLECharacteristic *pCharCommand = nullptr; // 命令特征
+NimBLEServer *pBLEServer = nullptr;
+NimBLECharacteristic *pCharNotify = nullptr;  // 通知特征
+NimBLECharacteristic *pCharCommand = nullptr; // 命令特征
 bool bleDeviceConnected = false;
 bool bleOldDeviceConnected = false;
+uint16_t bleConnHandle = 0xFFFF; // 存储当前连接句柄
 uint64_t bleConnectStartMs = 0;
 bool timeSyncReceived = false;
 
@@ -124,43 +120,6 @@ void getCustomParamsFromProtocol(unsigned int protocolId, unsigned int pulseLeng
     }
 }
 
-// RF发射使能与引脚模式切换封装
-void setRfTransmitEnable(bool enable)
-{
-    if (enable)
-    {
-        digitalWrite(RF_TRANSMIT_EN_PIN, HIGH);
-        mySwitch.enableTransmit(RF_TRANSMIT_PIN);
-        Serial.println("RF发射模块已开启");
-    }
-    else
-    {
-        mySwitch.disableTransmit();
-        pinMode(RF_TRANSMIT_PIN, INPUT);
-        digitalWrite(RF_TRANSMIT_EN_PIN, LOW);
-        Serial.println("RF发射模块已关闭");
-    }
-}
-
-// RF接收使能与引脚模式切换封装
-void setRfReceiveEnable(bool enable)
-{
-    if (enable)
-    {
-        digitalWrite(RF_RECEIVE_EN_PIN, HIGH);
-        mySwitch.enableReceive(RF_RECEIVE_PIN);
-        Serial.println("RF接收模块已开启");
-    }
-    else
-    {
-        mySwitch.disableReceive();
-        pinMode(RF_RECEIVE_PIN, INPUT);
-        digitalWrite(RF_RECEIVE_EN_PIN, LOW);
-        Serial.println("RF接收模块已关闭");
-    }
-}
-
-// 按键单击回调：切换RF发射接收使能
 void onButtonClick()
 {
     Serial.println("按键单击");
@@ -254,35 +213,35 @@ bool parseParamString(String paramStr, unsigned long &code, unsigned int &bitLen
 }
 
 // BLE服务器回调
-class MyServerCallbacks : public BLEServerCallbacks
+class MyServerCallbacks : public NimBLEServerCallbacks
 {
-    void onConnect(BLEServer *pServer)
+    void onConnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo)
     {
         bleDeviceConnected = true;
+        bleConnHandle = connInfo.getConnHandle();
         Serial.println("BLE设备已连接");
         bleConnectStartMs = millis();
         timeSyncReceived = false;
-        // 请求MTU协商，ESP32-C3最大支持512字节
-        pServer->updatePeerMTU(pServer->getConnId(), 512);
     }
 
-    void onDisconnect(BLEServer *pServer)
+    void onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &connInfo, int reason)
     {
         bleDeviceConnected = false;
+        bleConnHandle = 0xFFFF;
         Serial.println("BLE设备已断开");
     }
 
-    void onMtuChanged(BLEServer *pServer, esp_ble_gatts_cb_param_t *param)
+    void onMTUChange(NimBLEServer *pServer, NimBLEConnInfo &connInfo, uint16_t mtu)
     {
         Serial.print("MTU已更新为: ");
-        Serial.println(param->mtu.mtu);
+        Serial.println(mtu);
     }
 };
 
 // BLE命令回调 - 统一处理所有命令
-class CommandCallbacks : public BLECharacteristicCallbacks
+class CommandCallbacks : public NimBLECharacteristicCallbacks
 {
-    void onWrite(BLECharacteristic *pCharacteristic)
+    void onWrite(NimBLECharacteristic *pCharacteristic, NimBLEConnInfo &connInfo)
     {
         std::string value = pCharacteristic->getValue();
         if (value.length() > 0)
@@ -414,33 +373,27 @@ void setupBLE()
 {
     Serial.println("初始化BLE...");
 
-    BLEDevice::init(deviceId.c_str());
-    BLEDevice::setMTU(512);
-    pBLEServer = BLEDevice::createServer();
+    NimBLEDevice::init(deviceId.c_str());
+    NimBLEDevice::setMTU(512);
+    pBLEServer = NimBLEDevice::createServer();
     pBLEServer->setCallbacks(new MyServerCallbacks());
 
-    BLEService *pService = pBLEServer->createService(SERVICE_UUID);
+    NimBLEService *pService = pBLEServer->createService(SERVICE_UUID);
 
     // 通知特征 (Read/Notify) - 发送JSON数据到手机
     pCharNotify = pService->createCharacteristic(
         CHAR_NOTIFY_UUID,
-        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
-    pCharNotify->addDescriptor(new BLE2902());
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
 
     // 命令特征 (Write) - 接收手机发送的JSON命令
     pCharCommand = pService->createCharacteristic(
         CHAR_COMMAND_UUID,
-        BLECharacteristic::PROPERTY_WRITE);
+        NIMBLE_PROPERTY::WRITE);
     pCharCommand->setCallbacks(new CommandCallbacks());
 
-    pService->start();
-
-    BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+    NimBLEAdvertising *pAdvertising = NimBLEDevice::getAdvertising();
     pAdvertising->addServiceUUID(SERVICE_UUID);
-    pAdvertising->setScanResponse(true);
-    pAdvertising->setMinPreferred(0x06);
-    pAdvertising->setMinPreferred(0x12);
-    BLEDevice::startAdvertising();
+    NimBLEDevice::startAdvertising();
 
     Serial.println("BLE服务已启动，等待连接...");
 }
@@ -535,9 +488,6 @@ void processSendData()
 {
     if (pendingSendReady)
     {
-        // 使能发射模块
-        setRfTransmitEnable(true);
-        delay(10); // MOS管导通延时，确保模块上电
         pendingSendReady = false;
         // 适配 params[6] 构造协议
         RCSwitch::Protocol customProtocol = {
@@ -560,8 +510,6 @@ void processSendData()
         Serial.println(")");
         String msg = "已发送: " + String(pendingSendParams.code);
         sendBLENotify("status", msg);
-        // 关闭发射模块
-        setRfTransmitEnable(false);
     }
 }
 
@@ -635,7 +583,7 @@ void processBLEConnectionState()
             Serial.println("未收到时间同步命令，断开连接");
             if (pBLEServer)
             {
-                pBLEServer->disconnect(pBLEServer->getConnId());
+                pBLEServer->disconnect(bleConnHandle);
                 bleDeviceConnected = false; // =防止主循环重复触发断开
             }
         }
@@ -650,19 +598,13 @@ void setup()
     Serial.print("设备ID: ");
     Serial.println(deviceId);
     // 初始化433MHz发射模块
-    pinMode(RF_TRANSMIT_EN_PIN, OUTPUT);
-    setRfTransmitEnable(false); // 默认关闭发射模块
+    mySwitch.enableTransmit(RF_TRANSMIT_PIN);
     Serial.print("发射引脚: GPIO");
     Serial.println(RF_TRANSMIT_PIN);
-    Serial.print("发射模块使能引脚: GPIO");
-    Serial.println(RF_TRANSMIT_EN_PIN);
     // 初始化433MHz接收模块
-    pinMode(RF_RECEIVE_EN_PIN, OUTPUT);
-    setRfReceiveEnable(true); // 默认开启接收模块
+    mySwitch.enableReceive(RF_RECEIVE_PIN);
     Serial.print("接收引脚: GPIO");
     Serial.println(RF_RECEIVE_PIN);
-    Serial.print("接收模块使能引脚: GPIO");
-    Serial.println(RF_RECEIVE_EN_PIN);
     Serial.println("433MHz收发器已初始化");
 
     // 初始化BLE
